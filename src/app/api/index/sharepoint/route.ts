@@ -25,6 +25,25 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
 
+// Helper function to construct full URL for serverless environments
+function getFullUrl(req: NextRequest): URL {
+  // In serverless environments like Appwrite Sites, req.url might not contain the protocol
+  // So we need to construct the full URL from headers and pathname
+  const url = req.url;
+  
+  // Check if the URL already has a protocol
+  if (url.startsWith('http://') || url.startsWith('https://')) {
+    return new URL(url);
+  }
+  
+  // Construct the full URL from headers
+  const host = req.headers.get('host') || 'localhost';
+  const protocol = req.headers.get('x-forwarded-proto') || 'http';
+  const pathname = url.startsWith('/') ? url : `/${url}`;
+  
+  return new URL(`${protocol}://${host}${pathname}`);
+}
+
 export async function OPTIONS() {
   return new Response(null, {
     status: 204,
@@ -86,7 +105,7 @@ export async function POST(req: NextRequest) {
 // Get job status
 export async function GET(req: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url);
+    const { searchParams } = getFullUrl(req);
     const jobId = searchParams.get('jobId');
     const action = searchParams.get('action');
 
@@ -233,7 +252,7 @@ export async function GET(req: NextRequest) {
 export async function PUT(req: NextRequest) {
   try {
     const body = await req.json();
-    const { searchParams } = new URL(req.url);
+    const { searchParams } = getFullUrl(req);
     const action = searchParams.get('action');
 
     if (action === 'reindex') {
@@ -299,7 +318,7 @@ export async function PUT(req: NextRequest) {
 // Delete operations
 export async function DELETE(req: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url);
+    const { searchParams } = getFullUrl(req);
     const action = searchParams.get('action');
 
     const indexingService = await createIndexingService();
