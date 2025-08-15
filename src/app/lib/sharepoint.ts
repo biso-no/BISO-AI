@@ -329,6 +329,18 @@ export const SharePointConfigSchema = z.object({
 
 // Environment variable helper
 export function getSharePointConfig(): SharePointConfig {
+  // Validate required environment variables first
+  const tenantId = process.env.SHAREPOINT_TENANT_ID;
+  const clientId = process.env.SHAREPOINT_CLIENT_ID;
+  const clientSecret = process.env.SHAREPOINT_CLIENT_SECRET;
+  
+  if (!tenantId || !clientId || !clientSecret) {
+    throw new Error(
+      'Missing required SharePoint configuration. Please ensure SHAREPOINT_TENANT_ID, ' +
+      'SHAREPOINT_CLIENT_ID, and SHAREPOINT_CLIENT_SECRET environment variables are set.'
+    );
+  }
+  
   const rawSites = process.env.SHAREPOINT_SITES;
   let siteIdentifiers: string[] | undefined = undefined;
   if (rawSites) {
@@ -351,10 +363,10 @@ export function getSharePointConfig(): SharePointConfig {
   }
 
   const config = {
-    clientId: process.env.SHAREPOINT_CLIENT_ID!,
-    clientSecret: process.env.SHAREPOINT_CLIENT_SECRET!,
-    tenantId: process.env.SHAREPOINT_TENANT_ID!,
-    authority: `https://login.microsoftonline.com/${process.env.SHAREPOINT_TENANT_ID}`,
+    clientId,
+    clientSecret,
+    tenantId,
+    authority: `https://login.microsoftonline.com/${tenantId}`,
     siteIdentifiers,
   };
 

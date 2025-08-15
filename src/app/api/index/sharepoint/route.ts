@@ -3,6 +3,41 @@ import { z } from 'zod';
 import { createIndexingService } from '@/app/lib/indexing-service';
 import { SharePointService, getSharePointConfig } from '@/app/lib/sharepoint';
 
+// Helper function to get full URL from request
+function getFullUrl(req: NextRequest): URL {
+  // In some deployment environments (like Appwrite Sites), req.url might only contain the path
+  // We need to construct a full URL for parsing
+  try {
+    // First, try to use req.url directly if it's already a full URL
+    if (req.url.startsWith('http://') || req.url.startsWith('https://')) {
+      return new URL(req.url);
+    }
+    
+    // Otherwise, construct a base URL from headers or environment
+    const protocol = req.headers.get('x-forwarded-proto') || 'https';
+    const host = req.headers.get('host') || req.headers.get('x-forwarded-host');
+    
+    if (host) {
+      // Use the host from headers to construct the full URL
+      return new URL(req.url, `${protocol}://${host}`);
+    }
+    
+    // Fallback to environment variable if available
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL;
+    if (appUrl) {
+      return new URL(req.url, appUrl);
+    }
+    
+    // Last resort: use a dummy base URL just for parsing query params
+    // This works because we only need the searchParams, not the actual host
+    return new URL(req.url, 'http://localhost');
+  } catch (error) {
+    console.error('Error constructing URL:', error);
+    // Return a dummy URL to prevent crashes
+    return new URL('http://localhost' + req.url);
+  }
+}
+
 // Request schemas
 const StartIndexingSchema = z.object({
   siteId: z.string(),
@@ -24,25 +59,6 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
-
-// Helper function to construct full URL for serverless environments
-function getFullUrl(req: NextRequest): URL {
-  // In serverless environments like Appwrite Sites, req.url might not contain the protocol
-  // So we need to construct the full URL from headers and pathname
-  const url = req.url;
-  
-  // Check if the URL already has a protocol
-  if (url.startsWith('http://') || url.startsWith('https://')) {
-    return new URL(url);
-  }
-  
-  // Construct the full URL from headers
-  const host = req.headers.get('host') || 'localhost';
-  const protocol = req.headers.get('x-forwarded-proto') || 'http';
-  const pathname = url.startsWith('/') ? url : `/${url}`;
-  
-  return new URL(`${protocol}://${host}${pathname}`);
-}
 
 export async function OPTIONS() {
   return new Response(null, {
