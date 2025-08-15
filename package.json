@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev --turbopack",
-    "prebuild": "mkdir -p test/data && touch test/data/05-version-space.pdf",
+    "prebuild": "mkdir -p test/data && touch test/data/05-versions-space.pdf",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"
