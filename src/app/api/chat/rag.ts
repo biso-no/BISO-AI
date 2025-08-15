@@ -90,7 +90,7 @@ export const searchSharePoint = tool({
         site: result.site || 'Unknown Site',
         lastModified: result.lastModified || 'Unknown',
         score: result.score,
-        documentViewerUrl: process.env.NEXT_PUBLIC_APP_URL + result.documentViewerUrl,
+        documentViewerUrl: result.documentViewerUrl,
       }));
 
       // Generate language-aware message
