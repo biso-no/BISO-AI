@@ -3,6 +3,7 @@ import { openai, defaultModelName } from '@/app/lib/ai';
 import { tools } from './tools';
 import { prompt } from '@/app/lib/prompt';
 import { getJwtSession } from '@/app/lib/appwrite';
+import { headers } from 'next/headers';
 
 //export const runtime = 'edge';
 
@@ -27,7 +28,7 @@ type ChatRequest = {
 };
 
 export async function POST(req: Request) {
-	const jwt = req.headers.get("x-appwrite-user-jwt") || req.headers.get("X-Appwrite-JWT") || req.headers.get("x-bisoai-session");
+	const jwt = (await headers()).get("x-appwrite-user-jwt") || (await headers()).get("X-Appwrite-JWT") || (await headers()).get("x-bisoai-session");
 	const session = await getJwtSession(jwt!);
 	if (!session) {
 		return new Response(JSON.stringify({ error: "Unauthorized" }), {

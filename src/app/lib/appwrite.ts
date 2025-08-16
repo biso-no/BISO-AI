@@ -97,7 +97,9 @@ export async function createJwtClient(jwt: string) {
 }
 
 export async function getJwtSession(jwt: string) {
+  console.log("JWT: ", jwt);
   const { account } = await createJwtClient(jwt);
+  console.log("Account: ", account);
   if (!account) {
     return null;
   }
