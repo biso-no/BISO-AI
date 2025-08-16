@@ -1,4 +1,4 @@
-import { streamText, convertToModelMessages, UIMessage } from 'ai';
+import { streamText, convertToModelMessages, UIMessage, stepCountIs } from 'ai';
 import { openai, defaultModelName } from '@/app/lib/ai';
 import { tools } from './tools';
 import { prompt } from '@/app/lib/prompt';
@@ -43,11 +43,11 @@ export async function POST(req: Request) {
 		console.log("Raw messages string: ", JSON.stringify(messages));
 
         const result = streamText({
-			model: openai('gpt-4o'),
+			model: openai('gpt-5-mini'),
 			system: prompt,
 			messages: convertToModelMessages(messages),
 			tools,
-			maxSteps: 5,
+			stopWhen: stepCountIs(5),
 		});
 		const response = result.toUIMessageStreamResponse();
 		console.log("response", response);
