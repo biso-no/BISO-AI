@@ -21,6 +21,10 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import { SearchResults } from "@/app/components/SearchResults";
+import AuroraBackground from "@/app/components/AuroraBackground";
+import CodeBlock from "@/app/components/CodeBlock";
+import ScrollToBottom from "@/app/components/ScrollToBottom";
+import PromptSuggestions from "@/app/components/PromptSuggestions";
 import {
   Card,
   CardHeader,
@@ -47,6 +51,7 @@ import {
   User,
   Check,
   X,
+  Copy,
 } from "lucide-react";
 
 // ---------- Helper functions ----------
@@ -148,6 +153,7 @@ export default function PremiumChat() {
   const [input, setInput] = useState("");
   const formRef = useRef<HTMLFormElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
     // Always keep scroll pinned to bottom on new messages
@@ -161,15 +167,35 @@ export default function PremiumChat() {
     setInput("");
   }
 
+  function handleTextareaInput(e: React.FormEvent<HTMLTextAreaElement>) {
+    const el = e.currentTarget;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 240)}px`;
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      formRef.current?.requestSubmit();
+    }
+  }
+
+  const copyMessage = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {}
+  };
+
   return (
-    <div className="mx-auto grid min-h-[100dvh] w-full max-w-5xl grid-rows-[auto,1fr,auto] gap-4 p-4 sm:p-6">
+    <div className="relative grid min-h-[100dvh] w-full grid-rows-[auto,1fr,auto] gap-4 p-4 sm:p-6">
+      <AuroraBackground />
       {/* Header */}
-      <Card className="border-0 bg-gradient-to-br from-background to-muted/40 shadow-none">
+      <Card className="border-0 bg-background/60 shadow-none backdrop-blur supports-[backdrop-filter]:bg-background/50">
         <CardHeader className="flex flex-row items-center justify-between space-y-0">
           <div>
             <CardTitle className="text-xl sm:text-2xl">Aurora Chat</CardTitle>
             <CardDescription className="mt-1 flex items-center gap-2 text-sm">
-              <Sparkles className="h-4 w-4" /> Powered by AI SDK v5 with tool calling
+              <Sparkles className="h-4 w-4 text-primary" /> Powered by AI SDK v5 with generative UI
             </CardDescription>
           </div>
           <div className="flex items-center gap-2">
@@ -199,8 +225,20 @@ export default function PremiumChat() {
       {/* Messages */}
       <Card className="relative border-0 shadow-none">
         <CardContent className="p-0">
-          <ScrollArea ref={scrollRef} className="h-[58vh] rounded-2xl border bg-card p-4">
+          <ScrollArea ref={scrollRef} className="relative h-[58vh] rounded-2xl border bg-card/80 p-4 backdrop-blur supports-[backdrop-filter]:bg-card/70">
+            <ScrollToBottom targetRef={scrollRef as any} />
             <div className="space-y-6">
+              {messages.length === 0 && (
+                <div className="flex h-[46vh] flex-col items-center justify-center text-center">
+                  <div className="mb-3 rounded-full bg-primary/10 p-3">
+                    <Sparkles className="h-6 w-6 text-primary" />
+                  </div>
+                  <div className="text-lg font-medium">Start a conversation</div>
+                  <div className="mt-1 max-w-md text-sm text-muted-foreground">
+                    Ask about policies, search your SharePoint, or let me draft, summarize, and compare documents.
+                  </div>
+                </div>
+              )}
               {messages.map((m) => {
                 // Debug logging - remove after testing
                 console.log('Message:', m);
@@ -208,6 +246,11 @@ export default function PremiumChat() {
                 
                 const sources = extractSourcesFromMessage(m);
                 
+                const combinedText = (m.parts || [])
+                  .filter((p: any) => p.type === "text" && typeof p.text === "string")
+                  .map((p: any) => p.text)
+                  .join("\n\n");
+
                 return (
                 <motion.div
                   key={m.id}
@@ -215,6 +258,7 @@ export default function PremiumChat() {
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.18 }}
                 >
+                  <div className="relative">
                   <Bubble role={m.role as any}>
                     {/* Render each part according to type */}
                     <div className="prose prose-sm max-w-none dark:prose-invert">
@@ -226,45 +270,38 @@ export default function PremiumChat() {
                           case "text":
                             return (
                               <div key={idx} className="leading-relaxed">
-                                <div className="prose prose-sm max-w-none dark:prose-invert prose-pre:bg-muted prose-pre:text-foreground">
+                                <div className="prose prose-sm max-w-none dark:prose-invert prose-pre:bg-transparent prose-pre:text-foreground">
                                   <ReactMarkdown
                                     remarkPlugins={[remarkGfm]}
                                     rehypePlugins={[rehypeHighlight]}
                                     components={{
-                                    // Customize code blocks
-                                    pre: ({ children, ...props }) => (
-                                      <pre className="bg-muted text-foreground p-3 rounded-lg overflow-x-auto border" {...props}>
-                                        {children}
-                                      </pre>
-                                    ),
-                                    // Customize inline code
-                                    code: ({ children, className, ...props }) => {
-                                      const isInline = !className;
-                                      return (
-                                        <code
-                                          className={isInline 
-                                            ? "bg-muted px-1 py-0.5 rounded text-sm font-mono" 
-                                            : className
-                                          }
+                                      pre: ({ children }) => <>{children}</>,
+                                      code: ({ children, className, ...props }) => {
+                                        const isInline = !className;
+                                        const language = className?.replace("language-", "");
+                                        if (isInline) {
+                                          return (
+                                            <code className="bg-muted px-1 py-0.5 rounded text-sm font-mono" {...props}>
+                                              {children}
+                                            </code>
+                                          );
+                                        }
+                                        return (
+                                          <CodeBlock language={language} code={String(children)} />
+                                        );
+                                      },
+                                      a: ({ href, children, ...props }) => (
+                                        <a
+                                          href={href}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="text-primary hover:underline"
                                           {...props}
                                         >
                                           {children}
-                                        </code>
-                                      );
-                                    },
-                                    // Customize links to open in new tab
-                                    a: ({ href, children, ...props }) => (
-                                      <a
-                                        href={href}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="text-primary hover:underline"
-                                        {...props}
-                                      >
-                                        {children}
-                                      </a>
-                                    ),
-                                  }}
+                                        </a>
+                                      ),
+                                    }}
                                   >
                                     {part.text}
                                   </ReactMarkdown>
@@ -345,6 +382,7 @@ export default function PremiumChat() {
                                 query={part.input?.query ?? ''}
                                 totalResults={part.output?.totalResults}
                                 message={part.output?.message}
+                                languageInfo={part.output?.languageInfo}
                                 results={part.output?.results?.map((r: any) => ({
                                   title: r.title,
                                   text: r.text,
@@ -543,6 +581,19 @@ export default function PremiumChat() {
                       )}
                     </div>
                   </Bubble>
+                  {m.role === "assistant" && combinedText && (
+                    <div className="absolute -top-2 right-2">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button size="icon" variant="secondary" className="h-7 w-7 rounded-full" onClick={() => copyMessage(combinedText)}>
+                            <Copy className="h-3.5 w-3.5" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Copy message</TooltipContent>
+                      </Tooltip>
+                    </div>
+                  )}
+                  </div>
                 </motion.div>
                 );
               })}
@@ -558,7 +609,7 @@ export default function PremiumChat() {
       </Card>
 
       {/* Composer */}
-      <Card className="sticky bottom-0 border-0 bg-background/60 backdrop-blur">
+      <Card className="sticky bottom-0 border-0 bg-background/60 backdrop-blur supports-[backdrop-filter]:bg-background/50">
         <CardContent className="p-3 sm:p-4">
           {error && (
             <div className="mb-3 flex items-center gap-2 rounded-xl border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm">
@@ -568,12 +619,17 @@ export default function PremiumChat() {
             </div>
           )}
 
+          <PromptSuggestions onPick={(t) => setInput(t)} />
+
           <form ref={formRef} onSubmit={handleSubmit} className="flex items-end gap-2">
             <Textarea
+              ref={textareaRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Ask anything…"
-              className="min-h-[48px] max-h-40 resize-none rounded-2xl p-3"
+              onInput={handleTextareaInput}
+              onKeyDown={handleKeyDown}
+              placeholder="Ask anything… (Shift+Enter for newline)"
+              className="min-h-[48px] max-h-60 resize-none rounded-2xl p-3"
             />
             <Button type="submit" disabled={status === "streaming"} className="rounded-2xl px-4">
               <SendHorizonal className="mr-2 h-4 w-4" /> Send

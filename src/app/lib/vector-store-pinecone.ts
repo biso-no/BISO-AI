@@ -1,5 +1,5 @@
 import { IVectorStore, VectorDocument, SearchOptions, SearchResult } from './vector-store.types';
-import { QdrantClient } from '@qdrant/js-client-rest';
+import { Pinecone, RecordMetadata, QueryResponse, ScoredPineconeRecord } from '@pinecone-database/pinecone';
 import { embed, embedMany } from 'ai';
 import { openai } from './ai';
 import { v5 as uuidv5 } from 'uuid';
@@ -28,7 +28,7 @@ const CONFIG = {
     DEFAULT_MODEL: 'text-embedding-3-large' as EmbeddingModelName,
     MAX_TOKENS_PER_REQUEST: 7000,
     MAX_TOKENS_PER_INPUT: 2000,
-    MAX_ITEMS_PER_BATCH: 64,
+    MAX_ITEMS_PER_BATCH: 100, // Pinecone supports up to 100 vectors per batch
   },
   SEARCH: {
     DEFAULT_LIMIT: 5,
@@ -57,10 +57,10 @@ interface ProcessingBatch {
   tokenSum: number;
 }
 
-interface QdrantPoint {
+interface PineconeVector {
   id: string;
-  vector: number[];
-  payload: Record<string, any>;
+  values: number[];
+  metadata: RecordMetadata;
 }
 
 interface ModelStats {
@@ -71,19 +71,24 @@ interface ModelStats {
   estimatedCost: number;
 }
 
-export class QdrantVectorStore implements IVectorStore {
-  private client: QdrantClient;
-  private collectionName: string;
+export class PineconeVectorStore implements IVectorStore {
+  private client: Pinecone;
+  private indexName: string;
+  private namespace: string;
   private embeddingModel: any;
   private modelConfig: typeof EMBEDDING_MODELS[EmbeddingModelName];
   private isInitialized = false;
   private stats: ModelStats;
+  private index: any;
 
   constructor(
-    collectionName: string = 'sharepoint_documents',
+    indexName?: string,
+    namespace: string = 'default',
     modelName: EmbeddingModelName = CONFIG.EMBEDDING.DEFAULT_MODEL
   ) {
-    this.collectionName = this.sanitizeCollectionName(collectionName);
+    // Get index name from environment or use default
+    this.indexName = indexName || process.env.PINECONE_INDEX_NAME || 'sharepoint-documents';
+    this.namespace = namespace;
     this.modelConfig = EMBEDDING_MODELS[modelName];
     this.embeddingModel = openai.textEmbeddingModel(modelName);
     
@@ -95,16 +100,17 @@ export class QdrantVectorStore implements IVectorStore {
       estimatedCost: 0,
     };
     
-    this.client = new QdrantClient({
-      url: process.env.QDRANT_URL || 'http://localhost:6333',
-      apiKey: process.env.QDRANT_API_KEY,
+    // Initialize Pinecone client with API key
+    const apiKey = process.env.PINECONE_API_KEY;
+    if (!apiKey) {
+      throw new Error('PINECONE_API_KEY is required');
+    }
+    
+    this.client = new Pinecone({
+      apiKey,
     });
 
-    console.log(`🚀 QdrantVectorStore: ${modelName} (${this.modelConfig.vectorSize}D, gpt-tokenizer)`);
-  }
-
-  private sanitizeCollectionName(name: string): string {
-    return name.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+    console.log(`🚀 PineconeVectorStore: ${modelName} (${this.modelConfig.vectorSize}D) - Index: ${this.indexName}`);
   }
 
   private countTokens(text: string): number {
@@ -124,6 +130,8 @@ export class QdrantVectorStore implements IVectorStore {
         return await operation();
       } catch (error: any) {
         lastError = error;
+        console.error(`${context} - Attempt ${attempt} failed:`, error.message);
+        
         if (attempt === CONFIG.RETRY.MAX_ATTEMPTS) break;
         
         const delay = CONFIG.RETRY.INITIAL_DELAY * Math.pow(CONFIG.RETRY.BACKOFF_MULTIPLIER, attempt - 1);
@@ -138,24 +146,45 @@ export class QdrantVectorStore implements IVectorStore {
     if (this.isInitialized) return;
 
     await this.withRetry(async () => {
-      const collections = await this.client.getCollections();
-      const exists = collections.collections?.some(c => c.name === this.collectionName);
+      // List existing indexes
+      const existingIndexes = await this.client.listIndexes();
+      const indexExists = existingIndexes.indexes?.some(idx => idx.name === this.indexName);
       
-      if (!exists) {
-        await this.client.createCollection(this.collectionName, {
-          vectors: { 
-            size: this.modelConfig.vectorSize, 
-            distance: 'Cosine',
-            on_disk: true,
-          },
-          optimizers_config: {
-            default_segment_number: 2,
-            memmap_threshold: 20000,
-          },
+      if (!indexExists) {
+        console.log(`Creating Pinecone index: ${this.indexName}`);
+        
+        // Create the index with serverless spec (recommended for Vercel)
+        await this.client.createIndex({
+          name: this.indexName,
+          dimension: this.modelConfig.vectorSize,
+          metric: 'cosine',
+          spec: {
+            serverless: {
+              cloud: 'aws',
+              region: process.env.PINECONE_REGION || 'us-east-1',
+            }
+          }
         });
-        console.log(`✅ Created collection: ${this.collectionName}`);
+        
+        // Wait for index to be ready
+        console.log('Waiting for index to be ready...');
+        let retries = 0;
+        while (retries < 60) { // Wait up to 60 seconds
+          const description = await this.client.describeIndex(this.indexName);
+          if (description.status?.ready) {
+            console.log(`✅ Index ${this.indexName} is ready`);
+            break;
+          }
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          retries++;
+        }
       }
-    }, 'Initializing collection');
+      
+      // Get index reference
+      this.index = this.client.index(this.indexName);
+      
+      console.log(`✅ Connected to Pinecone index: ${this.indexName}`);
+    }, 'Initializing Pinecone index');
     
     this.isInitialized = true;
   }
@@ -185,7 +214,7 @@ export class QdrantVectorStore implements IVectorStore {
 
     if (!items.length) return;
 
-    // Create batches
+    // Create batches for embedding
     const batches: ProcessingBatch[] = [];
     let current: ProcessingBatch = { indices: [], texts: [], tokenSum: 0 };
 
@@ -223,11 +252,11 @@ export class QdrantVectorStore implements IVectorStore {
       this.updateStats(batch.tokenSum);
     }
 
-    // Create points
-    const points: QdrantPoint[] = items.map((item, idx) => ({
+    // Create Pinecone vectors
+    const vectors: PineconeVector[] = items.map((item, idx) => ({
       id: uuidv5(item.doc.id, SHAREPOINT_NAMESPACE),
-      vector: allEmbeddings[idx],
-      payload: {
+      values: allEmbeddings[idx],
+      metadata: {
         ...item.doc.metadata,
         text: item.text,
         originalId: item.doc.id,
@@ -236,33 +265,46 @@ export class QdrantVectorStore implements IVectorStore {
       },
     }));
 
-    await this.withRetry(
-      () => this.client.upsert(this.collectionName, { wait: true, points }),
-      'Upserting documents'
-    );
+    // Upsert vectors in batches (Pinecone recommends batches of 100)
+    const BATCH_SIZE = 100;
+    for (let i = 0; i < vectors.length; i += BATCH_SIZE) {
+      const batch = vectors.slice(i, i + BATCH_SIZE);
+      await this.withRetry(
+        () => this.index.namespace(this.namespace).upsert(batch),
+        `Upserting batch ${i / BATCH_SIZE + 1}`
+      );
+    }
 
-    console.log(`✅ Indexed ${points.length} documents`);
+    console.log(`✅ Indexed ${vectors.length} documents to Pinecone`);
   }
 
   async search(options: SearchOptions): Promise<SearchResult[]> {
     await this.initialize();
-    const { query, k = CONFIG.SEARCH.DEFAULT_LIMIT, filter } = options;
+    const { query, k = CONFIG.SEARCH.DEFAULT_LIMIT, filter, includeMetadata = true } = options;
     
+    // For metadata-only search (no query)
     if (!query && filter) {
-      const result = await this.client.scroll(this.collectionName, {
-        filter: { must: Object.entries(filter).map(([key, value]) => ({ key, match: { value } })) },
-        limit: k,
-        with_payload: true,
-        with_vector: false,
-      });
+      // Pinecone doesn't support metadata-only queries without a vector
+      // We need to provide a zero vector or random vector for this case
+      const zeroVector = new Array(this.modelConfig.vectorSize).fill(0);
       
-      return result.points.map((res, i) => ({
-        id: (res.payload?.originalId as string) || String(res.id ?? `result_${i}`),
-        content: (res.payload?.text as string) || '',
-        metadata: res.payload || {},
-        score: 1,
-        distance: 0,
-      }));
+      const results = await this.withRetry(
+        () => this.index.namespace(this.namespace).query({
+          vector: zeroVector,
+          topK: k,
+          includeMetadata,
+          filter,
+        }),
+        'Performing metadata-only search'
+      ) as QueryResponse;
+      
+      return results.matches?.map((match) => ({
+        id: String(match.metadata?.originalId || match.id),
+        content: String(match.metadata?.text || ''),
+        metadata: includeMetadata ? (match.metadata || {}) : {},
+        score: match.score || 0,
+        distance: 1 - (match.score || 0),
+      })) || [];
     }
 
     if (!query) throw new Error('Query required for semantic search');
@@ -275,31 +317,28 @@ export class QdrantVectorStore implements IVectorStore {
       'Generating query embedding'
     );
 
-    const searchParams: any = {
+    const queryRequest: any = {
       vector,
-      limit: k,
-      with_payload: true,
-      with_vector: false,
+      topK: k,
+      includeMetadata,
     };
 
     if (filter) {
-      searchParams.filter = {
-        must: Object.entries(filter).map(([key, value]) => ({ key, match: { value } }))
-      };
+      queryRequest.filter = filter;
     }
 
     const results = await this.withRetry(
-      () => this.client.search(this.collectionName, searchParams),
+      () => this.index.namespace(this.namespace).query(queryRequest),
       'Performing search'
-    );
+    ) as QueryResponse;
 
-    return results.map((res, i) => ({
-      id: (res.payload?.originalId as string) || String(res.id ?? `result_${i}`),
-      content: (res.payload?.text as string) || '',
-      metadata: res.payload || {},
-      score: typeof res.score === 'number' ? res.score : 0,
-      distance: 1 - (typeof res.score === 'number' ? res.score : 0),
-    }));
+    return results.matches?.map((match) => ({
+      id: String(match.metadata?.originalId || match.id),
+      content: String(match.metadata?.text || ''),
+      metadata: includeMetadata ? (match.metadata || {}) : {},
+      score: match.score || 0,
+      distance: 1 - (match.score || 0),
+    })) || [];
   }
 
   async searchBroad(query: string, limit: number): Promise<SearchResult[]> {
@@ -313,23 +352,21 @@ export class QdrantVectorStore implements IVectorStore {
     );
 
     const results = await this.withRetry(
-      () => this.client.search(this.collectionName, {
+      () => this.index.namespace(this.namespace).query({
         vector,
-        limit: cappedLimit,
-        with_payload: true,
-        with_vector: false,
-        score_threshold: CONFIG.SEARCH.MIN_SCORE_THRESHOLD,
+        topK: cappedLimit,
+        includeMetadata: true,
       }),
       'Performing broad search'
-    );
+    ) as QueryResponse;
 
-    return results.map((res, i) => ({
-      id: (res.payload?.originalId as string) || String(res.id ?? `result_${i}`),
-      content: (res.payload?.text as string) || '',
-      metadata: res.payload || {},
-      score: typeof res.score === 'number' ? res.score : 0,
-      distance: 1 - (typeof res.score === 'number' ? res.score : 0),
-    }));
+    return results.matches?.map((match) => ({
+      id: String(match.metadata?.originalId || match.id),
+      content: String(match.metadata?.text || ''),
+      metadata: match.metadata || {},
+      score: match.score || 0,
+      distance: 1 - (match.score || 0),
+    })).filter((result) => result.score >= CONFIG.SEARCH.MIN_SCORE_THRESHOLD) || [];
   }
 
   async deleteDocuments(ids: string[]): Promise<void> {
@@ -337,10 +374,13 @@ export class QdrantVectorStore implements IVectorStore {
     await this.initialize();
     
     const convertedIds = ids.map(id => uuidv5(id, SHAREPOINT_NAMESPACE));
+    
     await this.withRetry(
-      () => this.client.delete(this.collectionName, { points: convertedIds }),
+      () => this.index.namespace(this.namespace).deleteMany(convertedIds),
       'Deleting documents'
     );
+    
+    console.log(`🗑️ Deleted ${ids.length} documents from Pinecone`);
   }
 
   async updateDocument(id: string, content: string, metadata: Record<string, any>): Promise<void> {
@@ -356,28 +396,36 @@ export class QdrantVectorStore implements IVectorStore {
     );
 
     await this.withRetry(
-      () => this.client.upsert(this.collectionName, {
-        wait: true,
-        points: [{ 
-          id: pointId, 
-          vector: embedding as number[], 
-          payload: { ...metadata, text: content, originalId: id, tokenCount } 
-        }],
-      }),
+      () => this.index.namespace(this.namespace).upsert([{
+        id: pointId,
+        values: embedding as number[],
+        metadata: { 
+          ...metadata, 
+          text: content, 
+          originalId: id, 
+          tokenCount,
+          processingTime: new Date().toISOString(),
+        }
+      }]),
       'Updating document'
     );
+    
+    console.log(`📝 Updated document ${id} in Pinecone`);
   }
 
-  async getCollectionStats(): Promise<{ count: number; modelStats: ModelStats }> {
+  async getCollectionStats(): Promise<{ count: number; modelStats?: ModelStats }> {
     await this.initialize();
     
-    const countInfo = await this.withRetry(
-      () => this.client.count(this.collectionName, { exact: true }),
+    const stats = await this.withRetry(
+      () => this.index.describeIndexStats(),
       'Getting collection stats'
-    );
+    ) as any;
+
+    const namespaceStats = stats.namespaces?.[this.namespace];
+    const count = namespaceStats?.recordCount || 0;
 
     return { 
-      count: countInfo.count || 0,
+      count,
       modelStats: { ...this.stats },
     };
   }
@@ -385,30 +433,33 @@ export class QdrantVectorStore implements IVectorStore {
   async clearCollection(): Promise<void> {
     await this.initialize();
     
+    // Delete all vectors in the namespace
     await this.withRetry(
-      () => this.client.deleteCollection(this.collectionName),
+      () => this.index.namespace(this.namespace).deleteAll(),
       'Clearing collection'
     );
     
-    this.isInitialized = false;
     this.stats.totalTokensProcessed = 0;
     this.stats.estimatedCost = 0;
     
-    await this.initialize();
-    console.log(`🧹 Collection cleared: ${this.collectionName}`);
+    console.log(`🧹 Cleared namespace: ${this.namespace} in index: ${this.indexName}`);
   }
 
   async healthCheck(): Promise<{ healthy: boolean; details: any }> {
     try {
-      const [collections, stats] = await Promise.all([
-        this.client.getCollections(),
+      const [indexInfo, stats] = await Promise.all([
+        this.client.describeIndex(this.indexName),
         this.getCollectionStats(),
       ]);
 
       return {
         healthy: true,
         details: {
-          collections: collections.collections?.length || 0,
+          indexName: this.indexName,
+          namespace: this.namespace,
+          dimension: indexInfo.dimension,
+          metric: indexInfo.metric,
+          status: indexInfo.status,
           documentCount: stats.count,
           modelStats: stats.modelStats,
           timestamp: new Date().toISOString(),

@@ -2,6 +2,7 @@ import { streamText, convertToModelMessages, UIMessage } from 'ai';
 import { openai, defaultModelName } from '@/app/lib/ai';
 import { tools } from './tools';
 import { prompt } from '@/app/lib/prompt';
+import { getLoggedInUser, getSession } from '@/app/lib/appwrite';
 
 //export const runtime = 'edge';
 
@@ -26,6 +27,13 @@ type ChatRequest = {
 };
 
 export async function POST(req: Request) {
+	const session = await getSession();
+	if (!session) {
+		return new Response(JSON.stringify({ error: "Unauthorized" }), {
+			status: 401,
+		});
+	}
+
 	try {
 		const { messages }: { messages: UIMessage[] } = await req.json();
 

@@ -1,20 +1,14 @@
 import { IVectorStore } from './vector-store.types';
-import { ChromaVectorStore } from './vector-store';
-import { QdrantVectorStore } from './vector-store-qdrant';
+import { PineconeVectorStore } from './vector-store-pinecone';
 
 let instance: IVectorStore | null = null;
 
 export async function getVectorStore(): Promise<IVectorStore> {
 	if (instance) return instance;
 
-	const backend = (process.env.VECTOR_BACKEND || 'chroma').toLowerCase();
-
-	if (backend === 'qdrant') {
-		instance = new QdrantVectorStore();
-	} else {
-		instance = new ChromaVectorStore();
-	}
-
+	// Create Pinecone instance - the recommended vector store for Vercel deployments
+	instance = new PineconeVectorStore();
 	await instance.initialize();
+	
 	return instance;
 }
