@@ -5,7 +5,6 @@ import { prompt } from '@/app/lib/prompt';
 import { getJwtSession } from '@/app/lib/appwrite';
 import { headers } from 'next/headers';
 
-//export const runtime = 'edge';
 
 export const maxDuration = 30;
 
@@ -48,6 +47,7 @@ export async function POST(req: Request) {
 			system: prompt,
 			messages: convertToModelMessages(messages),
 			tools,
+			maxSteps: 5,
 		});
 		const response = result.toUIMessageStreamResponse();
 		console.log("response", response);

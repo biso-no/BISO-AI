@@ -32,3 +32,4 @@ export function PromptSuggestions({ onPick, items = DEFAULT_SUGGESTIONS }: Promp
 export default PromptSuggestions;
 
 
+
