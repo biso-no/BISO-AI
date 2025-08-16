@@ -39,6 +39,9 @@ export async function POST(req: Request) {
 	try {
 		const { messages }: { messages: UIMessage[] } = await req.json();
 
+		console.log("Session: ", session);
+		console.log("Messages: ", messages);
+		console.log("Raw messages string: ", JSON.stringify(messages));
 
         const result = streamText({
 			model: openai('gpt-4o'),
