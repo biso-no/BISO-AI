@@ -7,8 +7,10 @@ export async function GET(request: Request) {
     const userId = url.searchParams.get("userId");
     const secret = url.searchParams.get("secret");
 
+    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL;
+
     if (!userId || !secret) {
-        return NextResponse.redirect(new URL("/login", request.url));
+        return NextResponse.redirect(new URL("/login", baseUrl!));
     }
 
     const { account } = await createAdminClient();
@@ -21,5 +23,5 @@ export async function GET(request: Request) {
         secure: process.env.NODE_ENV === "production",
     });
 
-    return NextResponse.redirect(new URL("/chat", request.url));
+    return NextResponse.redirect(new URL("/chat", baseUrl!));
 }
