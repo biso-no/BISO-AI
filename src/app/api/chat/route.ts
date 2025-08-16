@@ -2,7 +2,7 @@ import { streamText, convertToModelMessages, UIMessage } from 'ai';
 import { openai, defaultModelName } from '@/app/lib/ai';
 import { tools } from './tools';
 import { prompt } from '@/app/lib/prompt';
-import { getLoggedInUser, getSession } from '@/app/lib/appwrite';
+import { getJwtSession } from '@/app/lib/appwrite';
 
 //export const runtime = 'edge';
 
@@ -27,7 +27,8 @@ type ChatRequest = {
 };
 
 export async function POST(req: Request) {
-	const session = await getSession();
+	const jwt = req.headers.get("x-appwrite-user-jwt") || req.headers.get("X-Appwrite-JWT");
+	const session = await getJwtSession(jwt!);
 	if (!session) {
 		return new Response(JSON.stringify({ error: "Unauthorized" }), {
 			status: 401,

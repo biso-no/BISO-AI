@@ -82,3 +82,21 @@ export async function getSession() {
       return null;
     }
 }
+
+export async function createJwtClient(jwt: string) {
+  const client = new Client()
+    .setEndpoint(process.env.APPWRITE_ENDPOINT!)
+    .setProject(process.env.APPWRITE_PROJECT_ID!)
+    .setJWT(jwt);
+
+  return {
+    get account() {
+      return new Account(client);
+    },
+  };
+}
+
+export async function getJwtSession(jwt: string) {
+  const { account } = await createJwtClient(jwt);
+  return await account.getSession("current");
+}
