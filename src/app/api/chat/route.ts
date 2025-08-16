@@ -27,7 +27,7 @@ type ChatRequest = {
 };
 
 export async function POST(req: Request) {
-	const jwt = req.headers.get("x-appwrite-user-jwt") || req.headers.get("X-Appwrite-JWT");
+	const jwt = req.headers.get("x-appwrite-user-jwt") || req.headers.get("X-Appwrite-JWT") || req.headers.get("x-bisoai-session");
 	const session = await getJwtSession(jwt!);
 	if (!session) {
 		return new Response(JSON.stringify({ error: "Unauthorized" }), {
