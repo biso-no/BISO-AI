@@ -7,6 +7,8 @@ import { headers } from 'next/headers';
 
 
 export const maxDuration = 30;
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 // Basic CORS preflight support for Flutter HTTP clients
 export async function OPTIONS() {
