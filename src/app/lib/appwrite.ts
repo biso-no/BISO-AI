@@ -98,5 +98,8 @@ export async function createJwtClient(jwt: string) {
 
 export async function getJwtSession(jwt: string) {
   const { account } = await createJwtClient(jwt);
-  return await account.getSession("current");
+  if (!account) {
+    return null;
+  }
+  return await account.get();
 }
